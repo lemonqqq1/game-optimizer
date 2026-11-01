@@ -8,7 +8,7 @@ from tkinter import ttk
 
 from PIL import ImageTk
 
-from . import __version__, art, core, ctx, games, gpu, journal, steam, system_tweaks
+from . import __version__, art, core, ctx, extras, games, gpu, journal, steam, system_tweaks
 
 BG, SIDE, CARD, CARD_HI = "#0e1117", "#141923", "#1a2030", "#232b40"
 ACCENT, ACCENT_HI = "#3d7bff", "#5b91ff"
@@ -85,16 +85,18 @@ class GameWindow(tk.Toplevel):
         super().__init__(app, bg=BG)
         self.app, self.game = app, game
         self.title(game.name)
-        self.geometry("780x500")
+        self.ex = extras.EXTRAS.get(game.appid)
         self.resizable(False, False)
         self.profile = games.PROFILES.get(game.appid)
         self.exe = games.find_exe(game, self.profile)
         dark_titlebar(self)
 
+        top = tk.Frame(self, bg=BG)
+        top.pack(fill="x")
         self.cover = art.load(app.root_dir, game.appid, game.name, (240, 360))
-        tk.Label(self, image=self.cover, bg=BG).pack(side="left", padx=20, pady=20, anchor="n")
+        tk.Label(top, image=self.cover, bg=BG).pack(side="left", padx=20, pady=20, anchor="n")
 
-        right = tk.Frame(self, bg=BG)
+        right = tk.Frame(top, bg=BG)
         right.pack(side="left", fill="both", expand=True, padx=(0, 20), pady=20)
         label(right, game.name, 18, bold=True, wraplength=440, justify="left").pack(anchor="w")
         self.badge = label(right, "", 10, bold=True)
@@ -117,12 +119,63 @@ class GameWindow(tk.Toplevel):
         self.status.pack(anchor="w", pady=(10, 0))
 
         btns = tk.Frame(right, bg=BG)
-        btns.pack(side="bottom", fill="x")
+        btns.pack(fill="x", pady=(14, 0))
         Btn(btns, "▶  Играть", self.play, "ok", 11, padx=22, pady=10).pack(side="left")
         self.opt_btn = Btn(btns, "⚡  Оптимизировать", self.optimize, "primary", 11, padx=22, pady=10)
         self.opt_btn.pack(side="left", padx=8)
         Btn(btns, "Папка", lambda: os.startfile(game.path), "ghost", 10, pady=10).pack(side="left")
+        if self.ex:
+            self._build_extras()
         self.refresh()
+        self.update_idletasks()
+        self.geometry(f"780x{max(420, self.winfo_reqheight())}")
+
+    def _build_extras(self):
+        ex, path = self.ex, self.game.path
+        box = tk.Frame(self, bg=CARD)
+        box.pack(fill="x", padx=20, pady=(0, 20))
+        label(box, "✨  Фишки", 13, bold=True, bg=CARD).pack(anchor="w", padx=16, pady=(14, 8))
+        cur_lines = extras.current_cfg(path, ex)
+        grid = tk.Frame(box, bg=CARD)
+        grid.pack(fill="x", padx=16)
+
+        style = {"bg": CARD, "activebackground": CARD, "selectcolor": CARD_HI, "fg": TEXT,
+                 "activeforeground": TEXT, "bd": 0, "highlightthickness": 0}
+        row = tk.Frame(grid, bg=CARD)
+        row.pack(fill="x", pady=4)
+        label(row, "Шрифт интерфейса", 10, bold=True, bg=CARD, width=22, anchor="w").pack(side="left")
+        names = ["Стандартный"] + list(extras.FONTS)
+        cur = extras.current_font(path, ex)
+        self.font_var = tk.StringVar(value=next((k for k, v in extras.FONTS.items() if v == cur), "Стандартный"))
+        ttk.Combobox(row, textvariable=self.font_var, values=names, state="readonly", width=24).pack(side="left")
+        label(row, "меню, HUD, чат", 9, MUTED, bg=CARD).pack(side="left", padx=8)
+
+        self.choice_vars = {}
+        for key, opts in ex.choices.items():
+            row = tk.Frame(grid, bg=CARD)
+            row.pack(fill="x", pady=4)
+            label(row, "Цвет HUD", 10, bold=True, bg=CARD, width=22, anchor="w").pack(side="left")
+            sel = next((n for n, ls in opts.items() if ls[0] in cur_lines), "Без изменений")
+            v = tk.StringVar(value=sel)
+            self.choice_vars[key] = v
+            ttk.Combobox(row, textvariable=v, values=["Без изменений"] + list(opts), state="readonly",
+                         width=24).pack(side="left")
+
+        self.extra_vars = {}
+        for e in ex.extras:
+            v = tk.BooleanVar(value=bool(cur_lines) and all(l in cur_lines for l in e.lines))
+            self.extra_vars[e.key] = v
+            row = tk.Frame(grid, bg=CARD)
+            row.pack(fill="x", pady=2)
+            tk.Checkbutton(row, variable=v, **style).pack(side="left")
+            label(row, e.title, 10, bold=True, bg=CARD).pack(side="left")
+            label(row, "  " + e.desc, 9, MUTED, bg=CARD).pack(side="left")
+
+        bottom = tk.Frame(box, bg=CARD)
+        bottom.pack(fill="x", padx=16, pady=12)
+        Btn(bottom, "✨  Применить фишки", self.apply_extras, "primary", 10).pack(side="left")
+        label(bottom, "Игровые файлы не меняются: только fonts.conf и autoexec. Откат — во вкладке «Журнал».",
+              9, MUTED, bg=CARD).pack(side="left", padx=10)
 
     def plan(self):
         items = ["Запуск на дискретной видеокарте, приоритет процесса High, без оптимизаций полного экрана"]
@@ -156,6 +209,30 @@ class GameWindow(tk.Toplevel):
             self.status.configure(text="Применяю...", fg=MUTED)
         self.app.run_task(lambda: games.optimize(self.game, self.app.root_dir), self.after_optimize)
 
+    def apply_extras(self):
+        ex, path = self.ex, self.game.path
+        family = extras.FONTS.get(self.font_var.get())
+        lines = []
+        for key, v in self.choice_vars.items():
+            lines += ex.choices[key].get(v.get(), [])
+        for e in ex.extras:
+            if self.extra_vars[e.key].get():
+                lines += e.lines
+
+        def work():
+            ctx.log(f"{self.game.name}: фишки")
+            extras.set_font(path, ex, family)
+            extras.set_cfg(path, ex, lines)
+            if self.game.appid == "730" and lines:  # CS2 сам не запускает autoexec.cfg
+                try:
+                    steam.set_launch_options(self.app.root_dir, "730", ["+exec autoexec"])
+                except steam.SteamRunning:
+                    ctx.log("  ! закрой Steam и примени ещё раз: нужен параметр запуска +exec autoexec")
+
+        self.status.configure(text="Применяю фишки...", fg=MUTED)
+        self.app.run_task(work, lambda: self.winfo_exists() and self.status.configure(
+            text="Фишки применены. Перезапусти игру, если она открыта.", fg=OK))
+
     def after_optimize(self):
         if self.winfo_exists():
             self.refresh()
@@ -181,6 +258,13 @@ class App(tk.Tk):
         style.theme_use("clam")
         style.configure("Vertical.TScrollbar", background=CARD_HI, troughcolor=BG, bordercolor=BG,
                         arrowcolor=MUTED, lightcolor=CARD_HI, darkcolor=CARD_HI)
+        style.configure("TCombobox", fieldbackground=CARD_HI, background=CARD_HI, foreground=TEXT,
+                        arrowcolor=TEXT, bordercolor=CARD_HI, lightcolor=CARD_HI, darkcolor=CARD_HI)
+        style.map("TCombobox", fieldbackground=[("readonly", CARD_HI)], foreground=[("readonly", TEXT)],
+                  selectbackground=[("readonly", CARD_HI)], selectforeground=[("readonly", TEXT)])
+        self.option_add("*TCombobox*Listbox.background", CARD)
+        self.option_add("*TCombobox*Listbox.foreground", TEXT)
+        self.option_add("*TCombobox*Listbox.selectBackground", ACCENT)
         style.configure("Horizontal.TProgressbar", background=ACCENT, troughcolor=CARD,
                         bordercolor=CARD, lightcolor=ACCENT, darkcolor=ACCENT)
 

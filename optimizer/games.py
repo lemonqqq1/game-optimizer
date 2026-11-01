@@ -25,7 +25,7 @@ class Profile:
 
 PROFILES = {
     "730": Profile(  # Counter-Strike 2
-        launch=["-novid", "-high", "+fps_max 0"],
+        launch=["-novid", "-high", "+fps_max 0", "+exec autoexec"],
         exe=[r"game\bin\win64\cs2.exe"],
         autoexec=r"game\csgo\cfg\autoexec.cfg",
         autoexec_lines=['fps_max "0"', 'fps_max_ui "120"', 'cl_autohelp "0"'],

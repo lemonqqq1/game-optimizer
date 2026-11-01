@@ -101,6 +101,41 @@ class LaunchOptionsTests(Base):
             steam.is_steam_running = orig
 
 
+class ExtrasTests(Base):
+    def setUp(self):
+        super().setUp()
+        from optimizer import extras
+        self.extras = extras
+        self.ex = extras.EXTRAS["730"]
+        conf = self.tmp / self.ex.fonts_conf
+        conf.parent.mkdir(parents=True)
+        self.conf_src = "<?xml version='1.0'?>\n<fontconfig>\n\t<dir>WINDOWSFONTDIR</dir>\n</fontconfig>\n"
+        conf.write_text(self.conf_src, "utf-8")
+        self.conf = conf
+
+    def test_font_set_change_and_revert(self):
+        self.extras.set_font(self.tmp, self.ex, "Impact")
+        self.extras.set_font(self.tmp, self.ex, "Consolas")
+        text = self.conf.read_text("utf-8")
+        self.assertEqual(text.count(self.extras.FONT_BEGIN), 1)
+        self.assertEqual(self.extras.current_font(self.tmp, self.ex), "Consolas")
+        self.assertLess(text.index(self.extras.FONT_END), text.index("</fontconfig>"))
+        revert.revert_all()
+        self.assertEqual(self.conf.read_text("utf-8"), self.conf_src)
+
+    def test_cfg_block_coexists_with_optimizer_block(self):
+        ae = self.tmp / self.ex.autoexec
+        games.write_block(ae, ['fps_max "0"'])
+        self.extras.set_cfg(self.tmp, self.ex, ['cl_hud_color "6"'])
+        games.write_block(ae, ['fps_max "0"'])          # повторная оптимизация не должна съесть фишки
+        self.assertEqual(self.extras.current_cfg(self.tmp, self.ex), ['cl_hud_color "6"'])
+        self.assertIn('fps_max "0"', ae.read_text("utf-8"))
+        self.extras.set_cfg(self.tmp, self.ex, [])
+        self.assertNotIn("GO-extras", ae.read_text("utf-8"))
+        revert.revert_all()
+        self.assertFalse(ae.exists())
+
+
 class GpuTests(Base):
     def test_nip_contains_chosen_settings(self):
         from optimizer import gpu
