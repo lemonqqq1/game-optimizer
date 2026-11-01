@@ -342,6 +342,17 @@ class App(tk.Tk):
         return card, g
 
     def _hover(self, card, color):
+        # Leave приходит и при переходе мыши между детьми карточки: красим, только если курсор
+        # действительно вышел за карточку, и только при смене цвета (иначе карточка мигает)
+        if color == CARD:
+            x, y = card.winfo_pointerxy()
+            w = card.winfo_containing(x, y)
+            while w is not None and w is not card:
+                w = w.master
+            if w is card:
+                return
+        if card["bg"] == color:
+            return
         for w in (card, *card.winfo_children()):
             if isinstance(w, (tk.Frame, tk.Label)) and not isinstance(w, Btn):
                 w.configure(bg=color)
