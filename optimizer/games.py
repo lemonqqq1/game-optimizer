@@ -105,6 +105,24 @@ def is_optimized(game: steam.Game) -> bool:
     return bool(cur and cur[0] == 3)
 
 
+_LAYERS = r"Software\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Layers"
+
+
+def has_layer(exe: Path, flag: str) -> bool:
+    cur = reg.read("HKCU", _LAYERS, str(exe))
+    return bool(cur and flag in cur[0].split())
+
+
+def set_layer(exe: Path, flag: str, on: bool):
+    """Флаг совместимости Windows для exe (HIGHDPIAWARE и т.п.), с записью в журнал."""
+    cur = reg.read("HKCU", _LAYERS, str(exe))
+    tokens = (cur[0] if cur else "~").split()
+    if (flag in tokens) == on:
+        return
+    tokens = tokens + [flag] if on else [t for t in tokens if t != flag]
+    reg.write("HKCU", _LAYERS, str(exe), " ".join(tokens), winreg.REG_SZ)
+
+
 def exe_tweaks(exe: Path):
     """Для любой игры: дискретная видеокарта, высокий приоритет, без оптимизаций полного экрана."""
     reg.write("HKCU", r"Software\Microsoft\DirectX\UserGpuPreferences", str(exe),

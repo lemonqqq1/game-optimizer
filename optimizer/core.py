@@ -10,7 +10,7 @@ def restore_point():
         return
     ps = ('Checkpoint-Computer -Description "GameOptimizer" '
           '-RestorePointType MODIFY_SETTINGS -ErrorAction Stop')
-    r = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True)
+    r = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True, creationflags=0x08000000)
     ctx.log("  готово" if r.returncode == 0 else "  не создана (Windows разрешает одну точку в сутки или защита отключена)")
 
 

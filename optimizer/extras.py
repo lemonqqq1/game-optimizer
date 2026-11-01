@@ -1,4 +1,4 @@
-"""«Фишки» для игр: свой шрифт интерфейса, цвет HUD, бинды и прочее.
+"""«Фишки» для игр: свой шрифт интерфейса, цвет HUD, бинды, параметры запуска по движку.
 
 Шрифт: в panorama/fonts/fonts.conf игры дописывается правило fontconfig, которое ставит выбранный
 шрифт Windows первым для всего интерфейса (игра уже читает WINDOWSFONTDIR). Игровые файлы
@@ -32,6 +32,15 @@ class Extra:
     title: str
     desc: str
     lines: list = field(default_factory=list)   # строки для autoexec
+    launch: list = field(default_factory=list)  # параметры запуска Steam
+    kind: str = ""                              # "dpi": флаг совместимости exe
+
+
+@dataclass
+class Choice:
+    key: str
+    title: str
+    options: dict = field(default_factory=dict)  # название -> Extra (используются lines/launch)
 
 
 @dataclass
@@ -39,7 +48,38 @@ class GameExtras:
     fonts_conf: str = ""                         # относительно папки игры
     autoexec: str = ""
     extras: list = field(default_factory=list)
-    choices: dict = field(default_factory=dict)  # key -> {название: строки}
+    choices: list = field(default_factory=list)
+
+
+def _opts(d: dict) -> dict:
+    return {name: Extra(name, name, "", *v) for name, v in d.items()}
+
+
+UNIVERSAL = [
+    Extra("dpi", "Чёткая картинка при масштабе Windows",
+          "При масштабе 125–150% старые игры растягиваются и мылят: отключаем", kind="dpi"),
+]
+
+ENGINE_EXTRAS = {
+    "unity": GameExtras(
+        extras=[Extra("d3d11", "Принудительно DirectX 11", "Если игра вылетает или фризит на DX12/Vulkan",
+                      launch=["-force-d3d11"]),
+                Extra("nolog", "Без файла логов", "Игра не пишет лог на диск во время игры", launch=["-nolog"])],
+        choices=[Choice("winmode", "Режим окна", _opts({
+            "Без рамки (быстрый Alt+Tab)": ([], ["-screen-fullscreen 0", "-popupwindow"]),
+            "Эксклюзивный (меньше задержка)": ([], ["-window-mode exclusive"]),
+        }))]),
+    "unreal": GameExtras(
+        extras=[Extra("allcores", "Все ядра процессора", "Движок использует все потоки CPU",
+                      launch=["-USEALLAVAILABLECORES"]),
+                Extra("nosplash", "Без заставки", "Пропуск заставки движка при запуске", launch=["-nosplash"])],
+        choices=[Choice("api", "Графический API", _opts({
+            "DirectX 11 (стабильнее)": ([], ["-dx11"]), "DirectX 12": ([], ["-dx12"]),
+        }))]),
+    "source2": GameExtras(extras=[Extra("novid", "Без вступительного ролика", "Сразу в меню", launch=["-novid"])]),
+    "source": GameExtras(extras=[Extra("novid", "Без вступительного ролика", "Сразу в меню", launch=["-novid"]),
+                                 Extra("console", "Консоль при запуске", "Консоль открыта сразу", launch=["-console"])]),
+}
 
 
 CS2_HUD = {"Белый": 1, "Голубой": 4, "Синий": 5, "Фиолетовый": 6, "Красный": 7, "Оранжевый": 8,
@@ -58,8 +98,18 @@ EXTRAS = {
             Extra("telemetry", "FPS и пинг на экране", "Встроенная телеметрия CS2 вместо net_graph",
                   ['cl_hud_telemetry_frametime_show "2"', 'cl_hud_telemetry_ping_show "2"',
                    'cl_hud_telemetry_net_misdelivery_show "2"']),
+            Extra("radar", "Радар как у про", "Видна вся карта, радар не крутится за камерой",
+                  ['cl_radar_scale "0.4"', 'cl_hud_radar_scale "1.15"', 'cl_radar_always_centered "0"',
+                   'cl_radar_rotate "1"']),
+            Extra("decals", "Чистка крови на Shift", "При ходьбе стираются кровь и следы на стенах",
+                  ['bind "shift" "+sprint; r_cleardecals"']),
+            Extra("losefocus", "Тишина при Alt+Tab", "Звук игры выключается, когда окно свёрнуто",
+                  ['snd_mute_losefocus "1"']),
+            Extra("usebuy", "E не открывает закупку", "Закупка только на B, E только поднимает и открывает",
+                  ['cl_use_opens_buy_menu "0"']),
+            Extra("hints", "Без подсказок новичка", "Убирает всплывающие советы", ['gameinstructor_enable "0"']),
         ],
-        choices={"hud": {name: [f'cl_hud_color "{v}"'] for name, v in CS2_HUD.items()}},
+        choices=[Choice("hud", "Цвет HUD", _opts({name: ([f'cl_hud_color "{v}"'],) for name, v in CS2_HUD.items()}))],
     ),
     "570": GameExtras(
         fonts_conf=r"game\core\panorama\fonts\fonts.conf",
@@ -71,9 +121,40 @@ EXTRAS = {
                   ['cl_showfps "1"', 'dota_hud_netgraph "1"']),
             Extra("minimap", "Крупные герои на миникарте", "Иконки героев на миникарте больше",
                   ['dota_minimap_hero_size "800"']),
+            Extra("rmb", "Удержание ПКМ = повтор приказа", "Зажал правую кнопку: герой идёт за курсором",
+                  ['dota_player_auto_repeat_right_mouse "1"']),
+            Extra("range", "Радиус атаки и умений", "Показывает дальность при наведении на умение",
+                  ['dota_disable_range_finder "0"']),
         ],
     ),
+    "252490": GameExtras(  # Rust
+        extras=[Extra("gc", "Меньше фризов от сборщика мусора", "Увеличенный буфер памяти Unity (нужно 16 ГБ ОЗУ)",
+                      launch=["-gc.buffer 4096"])],
+        choices=[Choice("winmode", "Режим окна", _opts({
+            "Без рамки (быстрый Alt+Tab)": ([], ["-window-mode borderless"]),
+            "Эксклюзивный (меньше задержка)": ([], ["-window-mode exclusive"]),
+        }))],
+    ),
 }
+
+
+def for_game(appid: str, eng, skip=()) -> GameExtras:
+    """Собирает все фишки игры: свои + по движку + общие для любой игры.
+    skip: параметры запуска, которые уже ставит профиль игры (не дублируем)."""
+    own = EXTRAS.get(appid, GameExtras())
+    base = ENGINE_EXTRAS.get(eng, GameExtras())
+    keys = {e.key for e in own.extras} | {e.key for e in base.extras if e.launch and set(e.launch) <= set(skip)}
+    ckeys = {c.key for c in own.choices}
+    return GameExtras(fonts_conf=own.fonts_conf, autoexec=own.autoexec,
+                      extras=own.extras + [e for e in base.extras if e.key not in keys] + UNIVERSAL,
+                      choices=own.choices + [c for c in base.choices if c.key not in ckeys])
+
+
+def all_launch(ex: GameExtras) -> list:
+    out = [f for e in ex.extras for f in e.launch]
+    for c in ex.choices:
+        out += [f for o in c.options.values() for f in o.launch]
+    return out
 
 
 def font_block(family: str) -> str:

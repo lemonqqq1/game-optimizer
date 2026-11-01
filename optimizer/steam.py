@@ -1,4 +1,5 @@
 """Поиск Steam, установленных игр и запись параметров запуска."""
+import re
 import subprocess
 import winreg
 from dataclasses import dataclass
@@ -73,7 +74,7 @@ def installed_games(root: Path) -> list:
 
 def is_steam_running() -> bool:
     out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq steam.exe"],
-                         capture_output=True, text=True, errors="replace").stdout
+                         capture_output=True, text=True, errors="replace", creationflags=0x08000000).stdout
     return "steam.exe" in out.lower()
 
 
@@ -91,7 +92,27 @@ def merge_flags(existing: str, wanted: list) -> str:
     return out
 
 
-def set_launch_options(root: Path, appid: str, wanted: list) -> bool:
+def strip_flags(existing: str, chunks) -> str:
+    """Убирает ровно те флаги (вместе со значением), которые когда-то добавила программа."""
+    out = existing
+    for chunk in chunks:
+        out = re.sub(r"(?<!\S)" + re.escape(chunk) + r"(?!\S)", " ", out)
+    return " ".join(out.split())
+
+
+def get_launch_options(root: Path, appid: str) -> str:
+    for cfg in localconfigs(root) if root else []:
+        data = vdf.parse(cfg.read_text("utf-8", errors="replace"))
+        node = vdf.get_ci(data, "UserLocalConfigStore") or {}
+        for part in ("Software", "Valve", "Steam", "apps", appid):
+            node = vdf.get_ci(node, part) or {}
+        val = next((v for k, v in node.items() if k.lower() == "launchoptions"), "")
+        if val:
+            return val
+    return ""
+
+
+def set_launch_options(root: Path, appid: str, wanted: list, remove=()) -> bool:
     """Требует закрытого Steam, иначе он перезапишет файл при выходе."""
     cfgs = localconfigs(root)
     if not cfgs:
@@ -107,7 +128,7 @@ def set_launch_options(root: Path, appid: str, wanted: list) -> bool:
         app = vdf.get_ci(node, appid, create=True)
         key = next((k for k in app if k.lower() == "launchoptions"), "LaunchOptions")
         old = app.get(key, "")
-        new = merge_flags(old, wanted)
+        new = merge_flags(strip_flags(old, remove), wanted)
         if new == old:
             continue
         ctx.log(f"  параметры запуска [{appid}]: {new}")

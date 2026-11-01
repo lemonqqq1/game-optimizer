@@ -64,9 +64,8 @@ def placeholder(title: str, size) -> Image.Image:
     return im
 
 
-def load(root, appid, title: str, size, kind: str = "cover"):
-    """PhotoImage нужного размера; если обложки нет, пробуем header, затем заглушку."""
-    im = None
+def load_pil(root, appid, title: str, size, kind: str = "cover") -> Image.Image:
+    """Картинка нужного размера; если обложки нет, пробуем header, затем заглушку."""
     for k in (kind, "cdn", "header", "hero"):
         if k == "cdn":
             p = _download(appid, _FILES[kind])
@@ -77,8 +76,11 @@ def load(root, appid, title: str, size, kind: str = "cover"):
         try:
             im = Image.open(p)
             im.draft("RGB", (size[0] * 2, size[1] * 2))
-            im = ImageOps.fit(im.convert("RGB"), size, Image.LANCZOS)
-            break
+            return ImageOps.fit(im.convert("RGB"), size, Image.LANCZOS)
         except Exception:
-            im = None
-    return ImageTk.PhotoImage(im or placeholder(title, size))
+            pass
+    return placeholder(title, size)
+
+
+def load(root, appid, title: str, size, kind: str = "cover"):
+    return ImageTk.PhotoImage(load_pil(root, appid, title, size, kind))

@@ -49,7 +49,7 @@ def detect() -> list:
     ps = ("Get-CimInstance Win32_VideoController | "
           "Select-Object Name,DriverVersion | ConvertTo-Json -Compress")
     out = subprocess.run(["powershell", "-NoProfile", "-Command", ps],
-                         capture_output=True, text=True, errors="replace").stdout.strip()
+                         capture_output=True, text=True, errors="replace", creationflags=0x08000000).stdout.strip()
     try:
         data = json.loads(out)
     except ValueError:
@@ -123,7 +123,7 @@ def _npi_exe() -> Path:
 def _import_nip(text: str):
     nip = journal.state_dir() / "profile.nip"
     nip.write_text(text, encoding="utf-16")
-    subprocess.run([str(_npi_exe()), "-silentImport", str(nip)], timeout=60)
+    subprocess.run([str(_npi_exe()), "-silentImport", str(nip)], timeout=60, creationflags=0x08000000)
 
 
 def nvidia_apply(keys=None):

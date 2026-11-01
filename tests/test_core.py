@@ -177,5 +177,54 @@ class RegistryTests(Base):
         self.assertEqual(reg.read("HKCU", self.PATH, "A")[0], 1)
 
 
+class V02Tests(Base):
+    def test_strip_flags_removes_only_exact_chunks(self):
+        self.assertEqual(steam.strip_flags("-high -screen-fullscreen 0 -popupwindow -w 1920",
+                                           ["-screen-fullscreen 0", "-popupwindow", "-nolog"]), "-high -w 1920")
+        self.assertEqual(steam.strip_flags("-dx11x -dx11", ["-dx11"]), "-dx11x")
+
+    def test_for_game_merges_engine_and_skips_profile_flags(self):
+        from optimizer import extras
+        cs = extras.for_game("730", "source2", ["-novid", "-high"])
+        keys = [e.key for e in cs.extras]
+        self.assertNotIn("novid", keys)                 # уже ставит профиль игры
+        self.assertIn("radar", keys)
+        self.assertEqual(keys[-1], "dpi")
+        unity = extras.for_game("999", "unity")
+        self.assertIn("-popupwindow", extras.all_launch(unity))
+        self.assertEqual([c.key for c in extras.for_game("252490", "unity").choices], ["winmode"])
+
+    def test_layer_flag_toggle_and_revert(self):
+        exe = self.tmp / "game.exe"
+        games.set_layer(exe, "HIGHDPIAWARE", True)
+        self.assertTrue(games.has_layer(exe, "HIGHDPIAWARE"))
+        games.set_layer(exe, "HIGHDPIAWARE", False)
+        self.assertFalse(games.has_layer(exe, "HIGHDPIAWARE"))
+        revert.revert_all()
+        self.assertIsNone(reg.read("HKCU", games._LAYERS, str(exe)))
+
+    def test_settings_merge_defaults(self):
+        from optimizer import settings
+        d = settings.load()
+        d["crosshair"]["color"] = "#ffffff"
+        d["crosshair"].pop("gap")
+        settings.save(d)
+        back = settings.load()
+        self.assertEqual(back["crosshair"]["color"], "#ffffff")
+        self.assertEqual(back["crosshair"]["gap"], settings.DEFAULTS["crosshair"]["gap"])
+
+    def test_history_seed_and_formatting(self):
+        from collections import deque
+        from optimizer import library, sysmon
+        dq = deque(maxlen=5)
+        sysmon._push(dq, 40)
+        sysmon._push(dq, 50)
+        self.assertEqual(list(dq), [40, 40, 40, 40, 50])
+        self.assertEqual(sysmon.last(deque()), 0.0)
+        self.assertEqual(library.fmt_hours(90), "1,5 ч")
+        self.assertEqual(library.fmt_hours(0), "не запускалась")
+        self.assertEqual(library.fmt_size(3 * 1024 ** 3), "3,0 ГБ")
+
+
 if __name__ == "__main__":
     unittest.main()

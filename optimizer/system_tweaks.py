@@ -16,7 +16,7 @@ ULTIMATE = "e9a42b02-d5df-448d-aa00-03f14749eb61"
 
 def _run(*args) -> str:
     # консольные утилиты пишут в OEM-кодировке (cp866 на русской Windows)
-    raw = subprocess.run(args, capture_output=True).stdout
+    raw = subprocess.run(args, capture_output=True, creationflags=0x08000000).stdout
     return raw.decode(f"cp{ctypes.windll.kernel32.GetOEMCP()}", errors="replace")
 
 
@@ -121,3 +121,33 @@ TWEAKS = [
     Tweak("net", "Снизить сетевую задержку", "Отключает задержку пакетов (Nagle) на всех адаптерах", network_latency),
     Tweak("temp", "Очистить временные файлы", "Не откатывается", clean_temp, revertible=False),
 ]
+
+
+def _is(hive, path, name, val) -> bool:
+    cur = reg.read(hive, path, name)
+    return bool(cur) and cur[0] == val
+
+
+_MM = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile"
+_IF = r"SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces"
+CHECKS = {
+    "power": lambda: bool(re.search(r"ultimate|максимальная производительность",
+                                    _run("powercfg", "/getactivescheme"), re.I)),
+    "gamemode": lambda: _is("HKCU", r"Software\Microsoft\GameBar", "AutoGameModeEnabled", 1),
+    "dvr": lambda: _is("HKCU", r"System\GameConfigStore", "GameDVR_Enabled", 0),
+    "hags": lambda: _is("HKLM", r"SYSTEM\CurrentControlSet\Control\GraphicsDrivers", "HwSchMode", 2),
+    "mmcss": lambda: _is("HKLM", _MM, "SystemResponsiveness", 0),
+    "mouse": lambda: _is("HKCU", r"Control Panel\Mouse", "MouseSpeed", "0"),
+    "net": lambda: any(_is("HKLM", _IF + "\\" + g, "TCPNoDelay", 1) for g in reg.subkeys("HKLM", _IF)),
+}
+
+
+def status() -> dict:
+    """id твика -> уже включён ли он (для оценки ПК и галочек)."""
+    out = {}
+    for k, fn in CHECKS.items():
+        try:
+            out[k] = bool(fn())
+        except Exception:
+            out[k] = False
+    return out

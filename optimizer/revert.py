@@ -17,9 +17,9 @@ def _revert(e: dict):
         elif p.exists():
             p.unlink()
     elif kind == "powerplan":
-        subprocess.run(["powercfg", "/setactive", e["guid"]], capture_output=True)
+        subprocess.run(["powercfg", "/setactive", e["guid"]], capture_output=True, creationflags=0x08000000)
     elif kind == "powerscheme_created":
-        subprocess.run(["powercfg", "/delete", e["guid"]], capture_output=True)
+        subprocess.run(["powercfg", "/delete", e["guid"]], capture_output=True, creationflags=0x08000000)
     elif kind == "nvidia":
         gpu.nvidia_revert(e.get("keys"))
 
