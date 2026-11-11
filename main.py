@@ -1,12 +1,12 @@
 """Game Optimizer: запуск без аргументов открывает окно.
 
-CLI: --list | --apply-all | --revert, плюс --dry-run (ничего не менять).
+CLI: --list | --scan | --apply-all | --revert, плюс --dry-run (ничего не менять).
 """
 import argparse
 import ctypes
 import sys
 
-from optimizer import core, ctx, gpu, steam, system_tweaks
+from optimizer import core, ctx, gpu, launchers, recommend, scan, steam
 
 
 def is_admin() -> bool:
@@ -29,6 +29,7 @@ def elevate():
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--list", action="store_true", help="показать видеокарту и игры")
+    ap.add_argument("--scan", action="store_true", help="скан ПК и подобранные настройки (ничего не меняет)")
     ap.add_argument("--apply-all", action="store_true")
     ap.add_argument("--revert", action="store_true")
     ap.add_argument("--clean-temp", action="store_true", help="также очистить TEMP (необратимо)")
@@ -36,7 +37,7 @@ def main():
     a = ap.parse_args()
     ctx.dry_run = a.dry_run
 
-    if not a.dry_run and not a.list and not is_admin():
+    if not a.dry_run and not a.list and not a.scan and not is_admin():
         elevate()
 
     if a.list:
@@ -44,14 +45,26 @@ def main():
             print(f"GPU: {g.name} [{g.vendor}] driver {g.driver}")
         root = steam.steam_root()
         print(f"Steam: {root}")
-        for g in (steam.installed_games(root) if root else []):
+        for g in launchers.all_games(root):
             print(f"  {g.appid:>8}  {g.name}")
+    elif a.scan:
+        specs = scan.scan()
+        print("Скан ПК:")
+        for label, value in specs.summary():
+            print(f"  {label}: {value}")
+        print(f"Оценка: {specs.score}/100, уровень: {core.TIER_NAMES.get(specs.tier, specs.tier)}")
+        print("Что будет подобрано под это железо:")
+        for title, reason in recommend.build(specs).notes:
+            print(f"  - {title}: {reason}")
     elif a.apply_all:
-        gpus = gpu.detect()
         root = steam.steam_root()
-        games = steam.installed_games(root) if root else []
-        core.run({t.id for t in system_tweaks.TWEAKS if t.id != "temp" or a.clean_temp}, games, gpus[0] if gpus else None,
-                 make_restore_point=not a.dry_run)
+        _, plan = core.auto(None, launchers.all_games(root), make_restore_point=not a.dry_run)
+        if a.clean_temp:
+            from optimizer import system_tweaks
+            for t in system_tweaks.TWEAKS:
+                if t.id == "temp":
+                    ctx.log(f"{t.title}:")
+                    t.fn()
     elif a.revert:
         core.undo()
     else:

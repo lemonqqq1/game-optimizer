@@ -10,8 +10,8 @@ from tkinter import ttk
 
 from PIL import Image, ImageTk
 
-from . import (__version__, art, boost, core, ctx, extras, games, gpu, journal, library, overlay, settings,
-               steam, sysmon, system_tweaks)
+from . import (__version__, art, boost, core, ctx, extras, games, gpu, journal, launchers, library, overlay,
+               recommend, scan, settings, steam, sysmon, system_tweaks)
 from .ui import (ACCENT, ACCENT2, BG, CARD, CARD_HI, DANGER, DIM, FONT, LINE, MUTED, OK, SIDE, TEXT, WARN, Btn,
                  Card, Scroll, Slider, Spark, Toggle, dark_titlebar, gradient, label, mix, ring_image, rounded, toast)
 
@@ -22,6 +22,37 @@ HEADER = (168, 79)
 
 def has_flags(opts: str, chunks) -> bool:
     return bool(chunks) and all(re.search(r"(?<!\S)" + re.escape(c) + r"(?!\S)", opts) for c in chunks)
+
+
+def is_steam(g) -> bool:
+    """У игр Steam appid числовой; у остальных лаунчеров вид "epic:<AppName>"."""
+    return str(g.appid).isdigit()
+
+
+def launch_uri(g):
+    """Адрес запуска игры через её лаунчер или None, если лаунчер неизвестен."""
+    if is_steam(g):
+        return f"steam://rungameid/{g.appid}"
+    if str(g.appid).startswith("epic:"):
+        return f"com.epicgames.launcher://apps/{g.appid[5:]}?action=launch&silent=true"
+    return None
+
+
+def cover_pil(root, g, size, kind="cover"):
+    """Обложка из кэша Steam; для игр не из Steam (нет appid на CDN Steam) сразу заглушка."""
+    if not is_steam(g):
+        return art.placeholder(g.name, size)
+    return art.load_pil(root, g.appid, g.name, size, kind)
+
+
+def hours_text(app, g) -> str:
+    return library.fmt_hours(app.playtime.get(g.appid, (0, 0))[0]) if is_steam(g) else "—"
+
+
+TIER_TEXT = {"low": ("Слабый ПК", WARN), "mid": ("Средний ПК", ACCENT2), "high": ("Мощный ПК", OK)}
+TIER_INFO = {"low": "В играх с профилем ставятся минимальные видеонастройки: максимум FPS на слабом железе.",
+             "mid": "В играх с профилем ставятся сбалансированные видеонастройки: качество и FPS поровну.",
+             "high": "В играх с профилем ставятся высокие видеонастройки: запаса мощности хватает на качество."}
 
 
 def section(parent, title, sub=""):
@@ -76,17 +107,21 @@ class GameWindow(tk.Toplevel):
         fav = game.appid in app.cfg["favorites"]
         self.fav_btn = Btn(btns, "★" if fav else "☆", self.toggle_fav, "ghost", 13, padx=14, pady=8)
         self.fav_btn.pack(side="right")
-        for text, fn in (("Магазин", lambda: os.startfile(f"steam://store/{game.appid}")),
-                         ("Проверить файлы", lambda: os.startfile(f"steam://validate/{game.appid}")),
-                         ("Папка", lambda: os.startfile(game.path))):
+        links = [("Папка", lambda: os.startfile(game.path))]
+        if is_steam(game):  # магазин и проверка файлов есть только у Steam
+            links = [("Магазин", lambda: os.startfile(f"steam://store/{game.appid}")),
+                     ("Проверить файлы", lambda: os.startfile(f"steam://validate/{game.appid}"))] + links
+        for text, fn in links:
             Btn(btns, text, fn, "ghost", 9, padx=12, pady=9).pack(side="right", padx=(0, 6))
 
         stats = tk.Frame(wrap, bg=BG)
         stats.pack(fill="x", pady=(16, 0))
         stats.columnconfigure((0, 1, 2, 3), weight=1, uniform="s")
         mins, last = app.playtime.get(game.appid, (0, 0))
-        for i, (k, v) in enumerate((("НАИГРАНО", library.fmt_hours(mins)), ("ПОСЛЕДНИЙ ЗАПУСК", library.fmt_ago(last)),
-                                    ("РАЗМЕР", library.fmt_size(library.size_on_disk(game))),
+        steam_game = is_steam(game)
+        for i, (k, v) in enumerate((("НАИГРАНО", library.fmt_hours(mins) if steam_game else "—"),
+                                    ("ПОСЛЕДНИЙ ЗАПУСК", library.fmt_ago(last) if steam_game else "—"),
+                                    ("РАЗМЕР", library.fmt_size(library.size_on_disk(game) if steam_game else 0)),
                                     ("ДВИЖОК", library.ENGINES.get(self.engine, "—")))):
             c = Card(stats, r=12)
             c.grid(row=0, column=i, sticky="nsew", padx=(0 if i == 0 else 8, 0))
@@ -114,7 +149,7 @@ class GameWindow(tk.Toplevel):
 
     def _hero(self, body):
         w, h = self.HERO_W, 250
-        im = art.load_pil(self.app.root_dir, self.game.appid, self.game.name, (w, h), "hero")
+        im = cover_pil(self.app.root_dir, self.game, (w, h), "hero")
         fade = Image.linear_gradient("L").resize((w, h)).point(lambda v: int(min(255, v * 1.25)))
         im = Image.composite(Image.new("RGB", (w, h), BG), im, fade)
         self.hero_img = ImageTk.PhotoImage(im)
@@ -142,7 +177,8 @@ class GameWindow(tk.Toplevel):
         label(inner, "Всё пишется через журнал и откатывается. Параметры запуска Steam меняются только при "
                      "закрытом Steam.", 9, MUTED, wraplength=800, justify="left").pack(anchor="w", pady=(2, 8))
         cur_lines = extras.current_cfg(path, ex) if ex.autoexec else []
-        self.launch_opts = steam.get_launch_options(self.app.root_dir, self.game.appid)
+        self.launch_opts = (steam.get_launch_options(self.app.root_dir, self.game.appid)
+                            if is_steam(self.game) else "")
 
         def combo_row(title, var, values, hint=""):
             row = tk.Frame(inner, bg=CARD)
@@ -209,15 +245,16 @@ class GameWindow(tk.Toplevel):
 
     def play(self):
         self.app.play(self.game)
-        self.status.configure(text="Запускаю через Steam...", fg=OK)
+        self.status.configure(text="Запускаю через Steam..." if is_steam(self.game) else "Запускаю...", fg=OK)
 
     def optimize(self):
-        if self.profile and self.profile.launch and steam.is_steam_running():
+        if self.profile and self.profile.launch and is_steam(self.game) and steam.is_steam_running():
             self.status.configure(text="Steam открыт: параметры запуска не запишутся. Закрой Steam и повтори, "
                                        "остальные настройки применятся сейчас.", fg=WARN)
         else:
             self.status.configure(text="Применяю...", fg=MUTED)
-        self.app.run_task(lambda: games.optimize(self.game, self.app.root_dir), self.after_optimize)
+        tier = self.app.tier()
+        self.app.run_task(lambda: games.optimize(self.game, self.app.root_dir, tier), self.after_optimize)
 
     def apply_extras(self):
         ex, path, root, appid = self.ex, self.game.path, self.app.root_dir, self.game.appid
@@ -238,7 +275,7 @@ class GameWindow(tk.Toplevel):
             launch.append("+exec autoexec")
         remove = [c for c in managed if c not in launch]
         new_opts = steam.merge_flags(steam.strip_flags(self.launch_opts, remove), launch)
-        steam_open = new_opts != self.launch_opts and steam.is_steam_running()
+        steam_open = new_opts != self.launch_opts and is_steam(self.game) and steam.is_steam_running()
 
         def work():
             ctx.log(f"{self.game.name}: фишки")
@@ -248,7 +285,9 @@ class GameWindow(tk.Toplevel):
                 extras.set_cfg(path, ex, lines)
             if self.exe:
                 games.set_layer(self.exe, "HIGHDPIAWARE", dpi)
-            if managed or launch:
+            if (managed or launch) and not is_steam(self.game):
+                ctx.log("  параметры запуска есть только у игр Steam: пропущены")
+            elif managed or launch:
                 try:
                     steam.set_launch_options(root, appid, launch, remove)
                 except steam.SteamRunning:
@@ -257,7 +296,7 @@ class GameWindow(tk.Toplevel):
         def done():
             if not self.winfo_exists():
                 return
-            self.launch_opts = steam.get_launch_options(root, appid)
+            self.launch_opts = steam.get_launch_options(root, appid) if is_steam(self.game) else ""
             if steam_open:
                 self.status.configure(text="Фишки применены, кроме параметров запуска: закрой Steam и нажми ещё раз.",
                                       fg=WARN)
@@ -276,7 +315,7 @@ class GameWindow(tk.Toplevel):
 
 
 class App(tk.Tk):
-    NAV = (("home", "◆", "Панель"), ("games", "▦", "Игры"), ("boost", "⚡", "Буст"), ("overlay", "⌖", "Оверлей"),
+    NAV = (("home", "◆", "Панель"), ("scan", "◎", "Скан ПК"), ("games", "▦", "Игры"), ("boost", "⚡", "Буст"), ("overlay", "⌖", "Оверлей"),
            ("gpu", "▣", "Видеокарта"), ("system", "⚙", "Система"), ("log", "≡", "Журнал"))
 
     def __init__(self):
@@ -299,16 +338,19 @@ class App(tk.Tk):
 
         self.gpus = gpu.detect()
         self.root_dir = steam.steam_root()
-        self.games = steam.installed_games(self.root_dir) if self.root_dir else []
+        self.games = launchers.all_games(self.root_dir)  # Steam + Epic
         self.playtime = library.playtimes(self.root_dir)
-        self.sizes = {g.appid: library.size_on_disk(g) for g in self.games}
+        self.sizes = {g.appid: library.size_on_disk(g) if is_steam(g) else 0 for g in self.games}
+        self.specs = self.plan = None  # результат скана ПК (заполняется в фоне)
+        self.scanning, self._gpu_ticked = False, False
+        self.scan_q: queue.Queue = queue.Queue()
         self.sys_status, self.score = {}, 0
 
         self._build_sidebar()
         self.content = tk.Frame(self, bg=BG)
         self.content.pack(side="left", fill="both", expand=True)
         self.topbar = ttk.Progressbar(self.content, mode="indeterminate", style="Thin.Horizontal.TProgressbar")
-        self.pages = {"home": self._page_home(), "games": self._page_games(), "boost": self._page_boost(),
+        self.pages = {"home": self._page_home(), "scan": self._page_scan(), "games": self._page_games(), "boost": self._page_boost(),
                       "overlay": self._page_overlay(), "gpu": self._page_gpu(), "system": self._page_system(),
                       "log": self._page_log()}
         self.crosshair = overlay.Crosshair(self)
@@ -326,6 +368,7 @@ class App(tk.Tk):
         self.after(100, self.pump)
         self.after(500, self.tick)
         self.refresh_score()
+        self.start_scan()
 
     def _style(self):
         style = ttk.Style(self)
@@ -424,7 +467,7 @@ class App(tk.Tk):
     def _page_home(self):
         g = self.gpus[0] if self.gpus else None
         f = self.page("Панель", (f"{g.name}  ·  драйвер {g.driver}" if g else "Видеокарта не определена")
-                      + f"  ·  игр Steam: {len(self.games)}")
+                      + f"  ·  игр: {len(self.games)}")
         body = tk.Frame(f, bg=BG)
         body.pack(fill="both", expand=True, padx=32)
 
@@ -494,22 +537,21 @@ class App(tk.Tk):
             sp.pack(anchor="w", pady=(6, 0))
             self.tiles[k] = (v, sub, sp)
 
-        recent = sorted(self.games, key=lambda g: -self.playtime.get(g.appid, (0, 0))[1])[:5]
+        recent = sorted([g for g in self.games if is_steam(g)],
+                        key=lambda g: -self.playtime.get(g.appid, (0, 0))[1])[:5]
         if recent:
             label(body, "Недавно играли", 13, bold=True).pack(anchor="w", pady=(18, 8))
             row = tk.Frame(body, bg=BG)
             row.pack(fill="x")
             for g in recent:
-                img = ImageTk.PhotoImage(rounded(art.load_pil(self.root_dir, g.appid, g.name, HEADER, "header"),
-                                                 10, BG))
+                img = ImageTk.PhotoImage(rounded(cover_pil(self.root_dir, g, HEADER, "header"), 10, BG))
                 self.images.append(img)
                 cell = tk.Frame(row, bg=BG, cursor="hand2")
                 cell.pack(side="left", padx=(0, 12))
                 pic = tk.Label(cell, image=img, bg=BG, cursor="hand2")
                 pic.pack()
-                mins = self.playtime.get(g.appid, (0, 0))[0]
                 label(cell, g.name, 9, TEXT, True, wraplength=HEADER[0], justify="left").pack(anchor="w", pady=(4, 0))
-                label(cell, library.fmt_hours(mins), 8, MUTED).pack(anchor="w")
+                label(cell, hours_text(self, g), 8, MUTED).pack(anchor="w")
                 for w in (cell, pic):
                     w.bind("<Button-1>", lambda e, g=g: GameWindow(self, g))
         return f
@@ -577,6 +619,122 @@ class App(tk.Tk):
             self.ram_big.configure(text=f"{m.ram_used:.1f} / {m.ram_total:.0f} ГБ")
         self.after(1000, self.tick)
 
+    # ---------- Скан ПК ----------
+    def _page_scan(self):
+        f = self.page("Скан ПК", "Железо, оценка и настройки, подобранные именно под него")
+        sc = Scroll(f)
+        sc.pack(fill="both", expand=True, padx=(0, 12))
+        body = tk.Frame(sc.inner, bg=BG)
+        body.pack(fill="x", padx=32)
+        self.scan_status = label(body, "", 10, WARN, True)
+        self.scan_status.pack(anchor="w", pady=(0, 8))
+
+        top = tk.Frame(body, bg=BG)
+        top.pack(fill="x")
+        top.columnconfigure(0, weight=3, uniform="s")
+        top.columnconfigure(1, weight=2, uniform="s")
+        hw = Card(top, r=16)
+        hw.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        hi = tk.Frame(hw, bg=CARD)
+        hi.pack(fill="both", expand=True, padx=20, pady=18)
+        label(hi, "🖥  Железо", 13, bold=True).pack(anchor="w", pady=(0, 6))
+        self.scan_hw = tk.Frame(hi, bg=CARD)
+        self.scan_hw.pack(fill="x")
+
+        rc = Card(top, r=16)
+        rc.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
+        ri = tk.Frame(rc, bg=CARD)
+        ri.pack(fill="both", expand=True, padx=20, pady=18)
+        label(ri, "ОЦЕНКА ПК", 8, MUTED, True).pack(anchor="w")
+        self.scan_score = label(ri, "—", 40, bold=True)
+        self.scan_score.pack(anchor="w")
+        self.scan_tier = label(ri, "—", 14, MUTED, True)
+        self.scan_tier.pack(anchor="w")
+        self.scan_tier_info = label(ri, "", 9, MUTED, wraplength=300, justify="left")
+        self.scan_tier_info.pack(anchor="w", pady=(6, 0))
+
+        section(body, "Что подобрано под это железо",
+                "Каждое решение зависит от видеокарты, монитора, памяти и Windows. Причина указана под названием")
+        nc = Card(body, r=16)
+        nc.pack(fill="x", pady=(8, 0))
+        self.scan_notes = tk.Frame(nc, bg=CARD)
+        self.scan_notes.pack(fill="x", padx=20, pady=14)
+
+        section(body, "Игры с отдельным профилем",
+                "Для них видеонастройки подбираются по уровню ПК. Остальным играм ставятся общие настройки")
+        gc = Card(body, r=16)
+        gc.pack(fill="x", pady=(8, 0))
+        gi = tk.Frame(gc, bg=CARD)
+        gi.pack(fill="x", padx=20, pady=14)
+        names = [title for _, title in games.supported()]
+        label(gi, ",  ".join(names) if names else "—", 10, TEXT, wraplength=800, justify="left").pack(anchor="w")
+
+        btns = tk.Frame(body, bg=BG)
+        btns.pack(anchor="w", pady=18)
+        self.btn_apply_scan = Btn(btns, "⚡  Применить подобранное", self.optimize_all, "primary", 11, padx=22,
+                                  pady=10)
+        self.btn_apply_scan.pack(side="left")
+        self.btn_rescan = Btn(btns, "Пересканировать", self.start_scan, "ghost", 10, pady=10)
+        self.btn_rescan.pack(side="left", padx=8)
+        self._fill_scan()
+        return f
+
+    def start_scan(self):
+        """Скан в фоновом потоке. Результат уходит в scan_q, виджеты трогает только pump (поток Tk)."""
+        if self.scanning:
+            return
+        self.scanning = True
+        self.scan_status.configure(text="Сканирую железо…", fg=WARN)
+        self.btn_rescan.set_enabled(False)
+        if not self.specs:
+            self._fill_scan()
+
+        def work():
+            try:
+                specs = scan.scan()
+                self.scan_q.put(("ok", specs, recommend.build(specs)))
+            except Exception as e:
+                self.scan_q.put(("err", str(e)))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _scan_result(self, kind, specs=None, plan=None):
+        self.scanning = False
+        self.btn_rescan.set_enabled(True)
+        if kind != "ok":
+            self.scan_status.configure(text=f"Скан не удался: {specs}", fg=DANGER)
+            return
+        self.specs, self.plan = specs, plan
+        self.scan_status.configure(text="")
+        self._fill_scan()
+        if not self._gpu_ticked and self.gpu_vars:  # один раз ставим галочки по плану, дальше выбор за пользователем
+            self._gpu_ticked = True
+            for k, v in self.gpu_vars.items():
+                v.set(k in plan.gpu_keys)
+
+    def _fill_scan(self):
+        for box in (self.scan_hw, self.scan_notes):
+            for w in box.winfo_children():
+                w.destroy()
+        specs, plan = self.specs, self.plan
+        if not specs:
+            label(self.scan_hw, "Сканирую железо…" if self.scanning else "—", 10, MUTED).pack(anchor="w")
+            label(self.scan_notes, "—", 10, MUTED).pack(anchor="w")
+            return
+        for k, v in specs.summary():
+            row = tk.Frame(self.scan_hw, bg=CARD)
+            row.pack(fill="x", pady=3)
+            label(row, k, 9, MUTED, True, width=11, anchor="w").pack(side="left", anchor="n")
+            label(row, v, 10, TEXT, wraplength=420, justify="left").pack(side="left", anchor="n")
+        name, color = TIER_TEXT.get(specs.tier, TIER_TEXT["mid"])
+        self.scan_score.configure(text=str(specs.score))
+        self.scan_tier.configure(text=name, fg=color)
+        self.scan_tier_info.configure(text=TIER_INFO.get(specs.tier, ""))
+        for title, reason in plan.notes:
+            label(self.scan_notes, "•  " + title, 10, TEXT, True, wraplength=800, justify="left").pack(
+                anchor="w", pady=(6, 0))
+            label(self.scan_notes, reason, 9, MUTED, wraplength=780, justify="left").pack(anchor="w", padx=(16, 0))
+
     # ---------- Игры ----------
     def _page_games(self):
         f = self.page("Библиотека", "Нажми на обложку: окно игры с фишками. ☆ добавляет в избранное")
@@ -621,7 +779,7 @@ class App(tk.Tk):
         for g in self.games:
             self.cards.append(self._make_card(g))
         if not self.games:
-            label(self.scroll.inner, "Steam или игры не найдены", 12, MUTED).pack(pady=40)
+            label(self.scroll.inner, "Steam, Epic Games или игры не найдены", 12, MUTED).pack(pady=40)
         self.set_sort(self.cfg.get("sort", "recent"), save=False)
         return f
 
@@ -641,7 +799,7 @@ class App(tk.Tk):
             self.banner.pack_forget()
 
     def _make_card(self, g):
-        img = ImageTk.PhotoImage(rounded(art.load_pil(self.root_dir, g.appid, g.name, COVER), 10, CARD))
+        img = ImageTk.PhotoImage(rounded(cover_pil(self.root_dir, g, COVER), 10, CARD))
         self.images.append(img)
         card = Card(self.scroll.inner, r=14, fill=CARD, outline=LINE)
         cover = tk.Label(card, image=img, bg=CARD, cursor="hand2", bd=0)
@@ -653,8 +811,7 @@ class App(tk.Tk):
         name = tk.Label(card, text=g.name, bg=CARD, fg=TEXT, font=(FONT, 10, "bold"), wraplength=150,
                         height=2, justify="center", cursor="hand2")
         name.pack(padx=8)
-        mins = self.playtime.get(g.appid, (0, 0))[0]
-        meta = label(card, f"{library.fmt_hours(mins)}  ·  {library.fmt_size(self.sizes.get(g.appid, 0))}", 8, MUTED)
+        meta = label(card, f"{hours_text(self, g)}  ·  {library.fmt_size(self.sizes.get(g.appid, 0))}", 8, MUTED)
         meta.pack()
         badge = tk.Label(card, bg=CARD, font=(FONT, 8, "bold"))
         badge.pack(pady=(2, 6))
@@ -662,8 +819,7 @@ class App(tk.Tk):
         row = tk.Frame(card, bg=CARD)
         row.pack(pady=(0, 14))
         Btn(row, "▶  Играть", lambda: self.play(g), "primary", 9, padx=14, pady=6).pack(side="left")
-        Btn(row, "⚡", lambda: self.run_task(lambda: games.optimize(g, self.root_dir)),
-            "ghost", 10, padx=11, pady=5).pack(side="left", padx=(6, 0))
+        Btn(row, "⚡", lambda: self.optimize_game(g), "ghost", 10, padx=11, pady=5).pack(side="left", padx=(6, 0))
         for w in (cover, name):
             w.bind("<Button-1>", lambda e: GameWindow(self, g))
         for w in (card, cover, name, badge, meta, row):
@@ -735,6 +891,18 @@ class App(tk.Tk):
                 shown += 1
         self.count_lbl.configure(text=f"{shown} из {len(self.games)}")
 
+    def tier(self) -> str:
+        """Уровень видеонастроек из скана ПК; до окончания скана "mid"."""
+        return self.plan.game_tier if self.plan else "mid"
+
+    def optimize_game(self, g):
+        tier = self.tier()
+        self.run_task(lambda: games.optimize(g, self.root_dir, tier))
+
+    def _launch(self, g):
+        uri = launch_uri(g)
+        os.startfile(uri if uri else g.path)
+
     def play(self, g):
         if self.cfg.get("autoboost"):
             exes = [e for e in self.cfg.get("close_list", []) if e]
@@ -746,10 +914,9 @@ class App(tk.Tk):
                 mb = boost.clean_ram()
                 ctx.log(f"  память: освобождено {mb:.0f} МБ")
 
-            self.run_task(work, lambda: (os.startfile(f"steam://rungameid/{g.appid}"),
-                                         toast(self, f"Буст готов, запускаю {g.name}")))
+            self.run_task(work, lambda: (self._launch(g), toast(self, f"Буст готов, запускаю {g.name}")))
         else:
-            os.startfile(f"steam://rungameid/{g.appid}")
+            self._launch(g)
             toast(self, f"Запускаю {g.name}")
 
     # ---------- Буст ----------
@@ -1050,7 +1217,8 @@ class App(tk.Tk):
     def apply_gpu(self):
         keys = {k for k, v in self.gpu_vars.items() if v.get()}
         g = self.gpus[0]
-        self.run_task(lambda: core.run(set(), [], g, False, keys))
+        vals = {k: v for k, v in (self.plan.gpu_values if self.plan else {}).items() if k in keys}
+        self.run_task(lambda: core.run(set(), [], g, False, keys, gpu_values=vals))
         self.show("log")
 
     # ---------- Система ----------
@@ -1091,6 +1259,8 @@ class App(tk.Tk):
 
     # ---------- действия ----------
     def pump(self):
+        while not self.scan_q.empty():
+            self._scan_result(*self.scan_q.get())
         while not self.q.empty():
             msg = self.q.get()
             self.log.configure(state="normal")
@@ -1140,10 +1310,14 @@ class App(tk.Tk):
             done()
 
     def optimize_all(self):
-        ids = {t.id for t in system_tweaks.TWEAKS if t.revertible}
-        gp = self.gpus[0] if self.gpus else None
-        self.run_task(lambda: core.run(ids, self.games, gp, True),
-                      lambda: toast(self, "Буст завершён. Перезагрузи ПК, чтобы применилось всё"))
+        """Скан (если ещё не готов) и настройки, подобранные под железо, одним нажатием."""
+        specs, glist = self.specs, list(self.games)
+
+        def work():
+            res = core.auto(specs, glist, True)
+            self.scan_q.put(("ok",) + res)  # кэш для страницы «Скан ПК», виджеты трогает только pump
+
+        self.run_task(work, lambda: toast(self, "Буст завершён. Перезагрузи ПК, чтобы применилось всё"))
 
     def apply_system(self):
         ids = {k for k, v in self.tweak_vars.items() if v.get() and not k.startswith("_")}

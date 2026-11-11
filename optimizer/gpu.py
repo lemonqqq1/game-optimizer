@@ -126,19 +126,28 @@ def _import_nip(text: str):
     subprocess.run([str(_npi_exe()), "-silentImport", str(nip)], timeout=60, creationflags=0x08000000)
 
 
-def nvidia_apply(keys=None):
+def nvidia_apply(keys=None, values=None):
+    """values: {ключ: значение драйвера} вместо Setting.value (подбор под железо). В журнал идут те же ключи,
+    поэтому откат (nvidia_revert) возвращает значения драйвера по умолчанию для всех применённых ключей."""
     chosen = [s for s in NVIDIA if keys is None or s.key in keys]
     if not chosen:
         return
+    vals = values or {}
+    pairs = [(s, vals.get(s.key, s.value)) for s in chosen]
+
+    def text(s, v):
+        return f"{s.title}: значение {v}" if s.key in vals else f"{s.title}: {s.desc}"
+
     if ctx.dry_run:
-        for s in chosen:
-            ctx.log(f"  [dry-run] NVIDIA: {s.title} -> {s.desc}")
+        for s, v in pairs:
+            ctx.log(f"  [dry-run] NVIDIA: {text(s, v)}")
         return
     try:
-        _import_nip(build_nip([(s, s.value) for s in chosen]))
-        journal.record({"kind": "nvidia", "keys": [s.key for s in chosen]})
-        for s in chosen:
-            ctx.log(f"  NVIDIA: {s.title}: {s.desc}")
+        _import_nip(build_nip(pairs))
+        journal.record({"kind": "nvidia", "keys": [s.key for s in chosen],
+                        "values": {s.key: v for s, v in pairs if s.key in vals}})
+        for s, v in pairs:
+            ctx.log(f"  NVIDIA: {text(s, v)}")
     except Exception as e:
         ctx.log(f"  NVIDIA: не удалось применить ({e}). Можно вручную: Панель управления NVIDIA > "
                 "Управление параметрами 3D")
@@ -212,9 +221,10 @@ def open_amd_panel():
         ctx.log("AMD Software: Adrenalin Edition не найден")
 
 
-def apply_for(gpu: Gpu, keys=None):
+def apply_for(gpu: Gpu, keys=None, values=None):
+    """values (ключ -> значение) учитывается только для NVIDIA; для AMD игнорируется."""
     if gpu.vendor == "nvidia":
-        nvidia_apply(keys)
+        nvidia_apply(keys, values)
     elif gpu.vendor == "amd":
         amd_apply(keys)
     else:
